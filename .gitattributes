@@ -1,2 +1,6 @@
+*.dta linguist-vendored
 Rmarkdown_analysis_report.html linguist-documentation
 SweaveR_Analysis_Report.pdf linguist-documentation
+*.Rnw linguist-language=R
+*.Rmd linguist-language=R
+*.Rproj linguist-language=R
