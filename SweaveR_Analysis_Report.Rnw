@@ -1,0 +1,267 @@
+\documentclass{article}
+\usepackage[a4paper, left=0.8in, right=0.6in,top=0.4in, bottom =0.4in, includefoot]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{float}
+
+\title{	An exercise on treatment effects: Reproducing in R, Buser (2015) treatment effect analysis of income on religiousness}
+\author{Kreshnik Xhangolli}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section*{Purpose}
+The purpose of his exercise is to present the treatment effect analysis of income on religiousness conducted by Busser (2015) \footnote{Buser, Thomas. "The effect of income on religiousness." American Economic Journal: Applied Economics 7.3 (2015): 178-195.} in R. In addition, this exercise introduces several elements of reproducible research and good analysis such as:
+\begin{enumerate}
+  \item Use of one environment for both analysis and report writing. Code and comments are written in \texttt{.rnw file} and \texttt{knitr} package is employed.
+  \item Use of user-definied functions for the production of plots when reproducing the same plot with diffrent bin size.
+  \item Use of formula objects to reproduce the same analysis by adding and dropping covariates, or for different fucntional forms of the score variable.
+  \item Use of package stargazer to produce publication quality tables. This is a recent package added to R packages.
+\end{enumerate}
+In terms of analysis we show:
+\begin{enumerate}
+  \item Both treatment $D$ and outcome $Y$ variable pass the visual inspection test of conditional mean discontinuity
+	at the at the cutoff point of the score variable $S$; $E(Y|S), E(D|S)$ discontinuous at cutoff
+	\item Treatment effect of income on religiousness
+	  \begin{itemize}
+	    \item controling for covariates
+	    \item employing different bandwidths
+	    \item employing up to 3rd order polynomial of the score variable
+	  \end{itemize}
+  \item Covariates pass the regression test of no-break at cutoff point
+\end{enumerate}
+
+Buser (2015) employes cross-section data from a representative survey (N =2,645) from Ecuador. The fuzzy regression disconuity setting derived from the cash transfer program of theEcuadorian governement, called Bono Desarollo Humano (BDH). Eligibility BDH recipiency is determined by a cutoff percentile on a wealth index. The index is derived from nonlinear principal components analysis on a set of household observable characteristics. A new index, calculated on somewhat differing household characteristic was introduced in 2009, which affected the eligibility of households close to the cutoff point. Some previously non-eligible households gain eligibility, while some previuosly eligible households gained eligibility. Religiousness was measure through three proxies; household self-assessed religiousness, being an evangelical Christian, and attendance to selected religious services. Covariates analyzed are presented in table \ref{tb:covariates}. We recommend reading the paper for the detailed description.
+\begin{table}[h]
+\caption{List of covariates}
+\label{tb:covariates}
+\centering
+\begin{tabular}{llll}
+Variable & Description & Variable & Description\\
+\hline
+ciudad & city & parroqui & area\\
+expenditures & total household expenditure & denomination & religion of this household\\
+religiousness & self-assessed religioussness (scale 0-10) & score & normalized, 0 centered wealth index\\
+moremoneyold & transfer recipient before the reform & moremoneynew & transfer recipient after the reform \\
+householdsize & household members & ageresponder & age (years)\\
+schooling_resp & Years of schooling & protestant & Protestant \\
+attendance & Religious service attendance & attendpermonth & attendance per month\\
+collect & =moremoneynew & & 
+\end{tabular}
+\end{table}
+
+\section*{Data Preparation}
+
+The first line sets \texttt{knitr} options to no warnings, no messages and no double-hash comments for output. 
+<<>>=
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = NA)
+@
+
+The \texttt{foreign::read.dta} function can read only STATA 12 files therefore we first converted the data to this format. After reading the data into a dataframe using relative paths, we inspect data frame column types through a loop checking whether discrete data was converted correctly to factor type. The automatic conversion of discrete values into factors converted also \textit{religiousness (scale 1 to 10)} into a factor. We need this variable as numeric therefore it is converted back to numeric through \texttt{base::as.numeric}. The last two lines create two new dataframes, each containing records with either positive or negative score segments. These dataframes will be used in computing fitted lines.
+
+<<results="hide">>=
+remove(list = ls())
+library(foreign)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(stargazer)
+library(MASS)
+library(Formula)
+
+dataName <- "IncRelig_STATA12.dta"
+fullPath <- paste("./",dataName, sep="")
+
+df <- read.dta(fullPath)
+for (i in names(df)) print(c(i,class(df[[i]])))
+
+df$religiousness <- as.numeric(df$religiousness)
+
+df_pos_sc <- df[df$score>0,]
+df_neg_sc <- df[df$score<0,]
+  
+@
+
+
+\section*{Exercise 1: Visual Inspection}
+
+Plots were build by using \texttt{ggplot2} package and the display of multiple plots was done with \texttt{gridExtra} package. Different bin sizes were used to calculate $E(Y|S)$. To make code reusable we created a function that would take a bin width, y variable and y axis label as input and would return the desired plot as output. The y axis label is required mainly for better aesthetics. A list of \texttt{grobs} was created by applying \texttt{base::lapply} to function \texttt{visual\_inspection} on an input vector of bin widths and the respective inputs for y variable and y axis label. Iteration was possible through \texttt{standard evaluation} of \texttt{ggplot2}, i.e \texttt{aes\_string}.
+
+<<fig.cap="Disconuity visual inspection", fig.width=7, fig.height=3, fig.pos="H">>=
+
+visual_inspection <- function(bin_input, y_input, y_label_input){
+    graph_out <- ggplot(df,aes_string(x="score", y=y_input))+
+            geom_point(stat = "summary_bin", fun.y = mean, binwidth = bin_input) + 
+                  geom_vline(xintercept = 0) + 
+                    geom_smooth(data = df_pos_sc,method = "lm",se=FALSE) + 
+      geom_smooth(data = df_neg_sc,method = "lm",se=FALSE) + 
+      labs(title = paste("bin width",bin_input),
+           y = y_label_input, 
+           x = "score") +
+      theme(axis.title = element_text(size=6), 
+            plot.title = element_text(size=6),
+            axis.text = element_text(size=5)) 
+    return(graph_out)
+}
+
+bin_vec <- c(0.8,0.4,0.2)
+
+g1 <- lapply(bin_vec,visual_inspection,"attendpermonth","Church month attend")
+g1[4:6] <- lapply(bin_vec,visual_inspection,"religiousness","Religiousness")
+g1[7:9] <- lapply(bin_vec,visual_inspection,"protestant","Protestant")
+
+grid.arrange(grobs = g1,ncol=3)
+
+@
+
+From a visual inspection of Fig 1. we can we can assume that a disconuitiy of monthly church attendance at the threshhold of the SELBEN II score exists. This is visible for different bin width used. In a similar manner we can assume the disconuity also from the visual inspection of Protestant affiliation (or likelihood of being Protestant) for all the three bin width presented. As for self perceived religiousness, while we might perceive a disconuity with binwidth 0.8, the disconuity is less clear when we reduce the bin width to 0.4 or 0.2. All the above results are in line with Buser(2015).
+
+\section*{Exercise 2: Calculating effects}
+
+For each of the dependent variables we will analyze 6 models using OLS. The simplest model measured the transfer effects controling on the forcing variable \textit{score} and previous cash transfer status. More complex models introduced second and third order degree polynomials of the forcing variable and we added complexity by controlling on an additional set of controls (household size, age and education level). We built function \texttt{analyze\_models} that uses \textit{Formula} objects to reuse code and \texttt{stargazer} package to display the results in publication style outputs. The name of the dependent variable and the title for the table are required as input. The latter is required only for presentation purposes. In the beginning we declare the \textttt{Formula} object \texttt{overall\_model} that has 3 right hand side (RHS) parts and 4 left hand side (LHS) parts. We create the values of attributes \texttt{lhs} with \texttt{if else} statements. Instead the values for \texttt{rhs} are stored in a list. For each iteration on the elements of \texttt{rhs} list, we recreate a formula object by specifying \texttt{lhs} and \texttt{rhs} from \texttt{overall\_model} and then run a regression employing the temporary formula. The list with regression results for each model is then feeded to \texttt{stargazer}.
+
+<<results = "asis", fig.pos="H">>=
+
+analyze_models <- function(dependent_inp, title_inp){
+
+    overall_model <- as.formula(paste0("attendpermonth | religiousness | protestant ",
+                                   " ~ moremoneynew + moremoneyold + score  | ",
+                                   "householdsize + ageresponder + schooling_resp | ",
+                                   "I(score^2) | ", "I(score^3)"))
+    
+    overall_model <- Formula(overall_model) 
+    
+    if (dependent_inp == "attendpermonth") model_lhs <- 1
+    else if (dependent_inp == "religiousness") model_lhs <- 2
+    else if (dependent_inp == "protestant") model_lhs <- 3
+    
+    models_rhs <- list()
+    models_rhs[["simple"]] <- 1
+    models_rhs[["poly 2"]] <- c(1,3)
+    models_rhs[["poly 3"]] <- -2
+    models_rhs[["controls"]] <- c(1,2)
+    models_rhs[["controls poly 2"]] <- -4
+    models_rhs[["controls poly 3"]] <- c(1,2,3,4)
+    
+    list_models <- list()
+    
+    for (i in names(models_rhs)){
+      temp_formula <- as.formula(terms(overall_model,
+                                       lhs = model_lhs,
+                                       rhs = models_rhs[[i]]))
+      list_models[[i]] <- lm(temp_formula,data=df)
+    }
+    
+    return(
+      stargazer(list_models,
+                title = paste0("Regresion Resuls: Effects on ", title_inp),
+                column.sep.width = "2pt", no.space = TRUE, header = FALSE,
+                notes = paste0("Controls include household size, age ",
+                                "and years of schooling of the respondent"),
+                omit.stat = c("f","ser","adj.rsq"),
+                covariate.labels = c("Transfer now","Transfer before",
+                                     "Score", "Score^2", "Score^3", 
+                                     "Hh size", "Age", "Education"),
+                dep.var.labels.include = FALSE, dep.var.caption = "")
+    )
+}
+@
+
+Overall the significance of the transfer effects is in line with Buser(2015). The cash transfereffects have a positive effect on monthly church attendance and Protestant affilition, but do not affect self perceived religiousness. We note that our estimations of the transfer effects differ from those of Buser (2015). In our simplest model we estimated an increase of 1.4 church attendances monthly conditional on receiving the transfer, compared to an increase of 1.7 from Buser(2015). Also we estimated that a cash transfer would increase the likelihood of being Protestant by 5.3 percentage points, while Buser (2015) estimate was of 6.6 percentage points. These differences were consistent also for the more complex models. We have no hypothesis why the differences occur.
+
+<<results = "asis", fig.pos="H">>=
+analyze_models("attendpermonth","church attendance")
+# Output in Table 2
+@
+
+<<results = "asis", fig.pos="H">>=
+analyze_models("religiousness","self perceived religiousness")
+# Output in Table 3
+@
+
+<<results = "asis", fig.pos="H">>=
+analyze_models("protestant","Protestant affiliation")
+# Output in Table 4
+@
+
+<<results="hide">>=
+# This chunk of code computes a backward stepwise regression on monthly
+# church attendance. Results for this chunk are verbose and therefore
+# not presented. Summary of results is presented by calling "anova"
+# attribute of mode_step
+
+fmla_all_contr <- as.formula(paste0("attendpermonth ~ moremoneynew + moremoneyold + ",
+                                    "score  + I(score^2) + I(score^3)+",
+                                   "householdsize + ageresponder + schooling_resp + ",
+                                   " expenditures + ciudad + parroqui"))
+
+mod_long <- lm(fmla_all_contr, data = df[is.na(df$expenditures)==FALSE,])
+mod_step <- stepAIC(mod_long, direction = "backward")
+@
+
+We conducted stepwise selection using \texttt{MAAS::stepAIC} function. As the dependent variable we check monthly church attendance. The long model included current and previous cash transfers, 3rd degree polynomial of the scoring variable and controls on age, education, household size, expenditures, city and area. \texttt{Backward} stepwise selection was used. The final model based on AIC criteria includes cash transfer age, education and the third monomial of the scoring variable. The results of stepwise selection are surprising because as seen in Table 1, education and the third monomial are not significant in regression of model 6. We might be overfitting the data because of the significance of the third degree monomial of the scoring variable.
+
+<<>>=
+mod_step$anova
+@
+
+
+\section*{Exercise 3: Breaks in controlling covariates}
+For the visual inspection for breaks on covariates we use the same approach as in Exercise 1. Using \texttt{standard evaluation} of \texttt{ggplot2} we create a function for generating the desired graph. This function is looped through the list of desired covariates. The final result is presented through \texttt{gridExtra}. A visual inspection of the covariates household size, age, education and previous cash transfers does not hint at any disconuity at the threshold of the SELBEN II score.
+<<fig.cap="Disconuity visual inspection of covariates", fig.width=7, fig.height=3, fig.pos="H">>=
+
+break_inspection <- function(y_input, y_label_input){
+  graph_out <- ggplot(df,aes_string(x="score", y=y_input))+
+    geom_point(stat = "summary_bin",fun.y = mean, binwidth = 0.2) + 
+    geom_vline(xintercept = 0) + 
+    geom_smooth(data = df_pos_sc,method = "lm",se=FALSE) + 
+    geom_smooth(data = df_neg_sc,method = "lm",se=FALSE) + 
+    labs(y = y_label_input, x = "score")+
+    theme(axis.title = element_text(size=8), axis.text = element_text(size=6))
+  return(graph_out)
+}
+
+check_list <- c("householdsize","ageresponder","schooling_resp","moremoneyold")
+y_label_list <- c("HH size", "Age", "Education", "Former recipient")
+
+g2 <- list()
+
+for (i in 1:length(check_list)){
+  g2[[check_list[i]]] <- break_inspection(check_list[i],
+                                          y_label_list[i])
+} 
+
+grid.arrange(grobs = g2, ncol = 2)
+@
+
+The hypothesis that thera are no breaks in the covariates is supported by the regression results in Table 4.
+
+<<results = "asis", fig.pos="H">>=
+
+overall_cov_model <- as.formula(paste0("householdsize | ageresponder | ",
+                                       "moremoneyold | schooling_resp ~  ",
+                                        "moremoneynew +  score + I(score^2) + I(score^3)"))
+    
+overall_cov_model <- Formula(overall_cov_model) 
+
+list_cov_models <- list()
+    
+for (i in 1:4){
+      temp_cov_formula <- as.formula(terms(overall_cov_model, lhs = i))
+                                 
+      list_cov_models[[i]] <- lm(temp_cov_formula,data=df)
+}
+
+
+stargazer(list_cov_models,
+          title = "Regresion Resuls: Effects on Other Covariates",
+          column.sep.width = "4pt", no.space = TRUE, 
+          omit.stat = c("f","ser","adj.rsq"),
+          covariate.labels = c("Cash Transfer","Score","Score^2", "Score^3"),
+          dep.var.labels = c("Hh size","Age","Education","Previous Transfer"), 
+          dep.var.caption = "")
+
+@
+\end{document}
